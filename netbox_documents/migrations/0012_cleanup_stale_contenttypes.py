@@ -100,6 +100,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('netbox_documents', '0011_remove_old_models'),
+        ('core', '0024_job_notifications'),
     ]
 
     operations = [
