@@ -8,9 +8,8 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('contenttypes', '__first__'),
-        ('extras', '__first__'),
         ('netbox_documents', '0008_moduletypedocument'),
+        ('extras', '0001_initial'),
     ]
 
     operations = [
