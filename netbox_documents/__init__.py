@@ -8,7 +8,7 @@ class NetboxDocuments(PluginConfig):
     version = '0.8.5'
     author = 'Jason Yates'
     author_email = 'me@jasonyates.co.uk'
-    min_version = '4.3.0'
+    min_version = '4.4.0'
     base_url = 'documents'
     default_settings = {
         "enable_navigation_menu": True,
