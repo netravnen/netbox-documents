@@ -1,0 +1,205 @@
+# Fork-only workflow. Keeps patches/main rebased as a patch set on top of
+# upstream main, and keeps the fork's main identical to upstream main.
+#
+# Pushing commits that touch .github/workflows/ needs a token with the
+# "workflows" permission. GITHUB_TOKEN does not have it, so set a
+# SYNC_TOKEN secret (fine-grained PAT: Contents and Workflows read/write
+# on this repository). Without it, a sync that carries upstream workflow
+# changes fails at the push step.
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+  push:
+    branches: [patches/main]
+  pull_request:
+    branches: [patches/main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://github.com/jasonyates/netbox-documents.git
+  UPSTREAM_BRANCH: main
+  PATCH_BRANCH: patches/main
+
+jobs:
+  rebase:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      old: ${{ steps.rebase.outputs.old }}
+      upstream: ${{ steps.rebase.outputs.upstream }}
+      changed: ${{ steps.rebase.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PATCH_BRANCH }}
+          fetch-depth: 0
+
+      - name: Rebase patch set onto upstream
+        id: rebase
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --no-tags "$UPSTREAM_URL" "$UPSTREAM_BRANCH"
+          old=$(git rev-parse HEAD)
+          up=$(git rev-parse FETCH_HEAD)
+          echo "old=$old" >> "$GITHUB_OUTPUT"
+          echo "upstream=$up" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$up" HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Patch set is already on top of upstream $up." >> "$GITHUB_STEP_SUMMARY"
+          else
+            if ! git rebase "$up"; then
+              {
+                echo "### Rebase onto upstream $up failed"
+                echo '```'
+                git status --short
+                echo '```'
+                echo "Rebase $PATCH_BRANCH locally and force-push it."
+              } >> "$GITHUB_STEP_SUMMARY"
+              git rebase --abort
+              exit 1
+            fi
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "### Patch set on upstream ${up:0:7}"
+            echo '```'
+            git log --oneline "$up"..HEAD
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          git branch -f rebased HEAD
+          git bundle create patches.bundle rebased
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: patches-bundle
+          path: patches.bundle
+          retention-days: 7
+
+  test:
+    needs: rebase
+    if: >-
+      always() &&
+      (needs.rebase.result == 'success' || needs.rebase.result == 'skipped')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        netbox: [v4.6.8, v4.7.3]
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: netbox
+          POSTGRES_PASSWORD: netbox
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - name: Check out plugin
+        if: needs.rebase.result == 'skipped'
+        uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - name: Download rebased patch set
+        if: needs.rebase.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: patches-bundle
+
+      - name: Check out rebased plugin
+        if: needs.rebase.result == 'success'
+        run: git clone --branch rebased patches.bundle plugin
+
+      - name: Check out NetBox ${{ matrix.netbox }}
+        uses: actions/checkout@v4
+        with:
+          repository: netbox-community/netbox
+          ref: ${{ matrix.netbox }}
+          path: netbox
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install NetBox and plugin
+        run: |
+          pip install -r netbox/requirements.txt
+          pip install ./plugin
+
+      - name: Configure NetBox
+        run: |
+          cat > netbox/netbox/netbox/configuration.py <<'EOF'
+          from .configuration_testing import *  # noqa: F403
+
+          PLUGINS = ['netbox_documents']
+          EOF
+
+      - name: Run plugin tests
+        working-directory: netbox/netbox
+        run: python manage.py test netbox_documents --noinput
+
+  publish:
+    needs: [rebase, test]
+    if: needs.rebase.outputs.changed == 'true' && needs.test.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PATCH_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: patches-bundle
+
+      - name: Push rebased patch set
+        env:
+          OLD: ${{ needs.rebase.outputs.old }}
+        run: |
+          git fetch patches.bundle rebased
+          git push --force-with-lease="refs/heads/$PATCH_BRANCH:$OLD" \
+            origin "$(git rev-parse FETCH_HEAD):refs/heads/$PATCH_BRANCH"
+
+  mirror-main:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Make main follow upstream main
+        run: |
+          git fetch --no-tags "$UPSTREAM_URL" "$UPSTREAM_BRANCH"
+          up=$(git rev-parse FETCH_HEAD)
+          if [ "$(git rev-parse origin/main)" = "$up" ]; then
+            echo "main is already at upstream $up."
+            exit 0
+          fi
+          git push --force-with-lease=refs/heads/main origin "$up:refs/heads/main"
