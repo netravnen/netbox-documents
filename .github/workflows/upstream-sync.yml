@@ -38,7 +38,7 @@ jobs:
       upstream: ${{ steps.rebase.outputs.upstream }}
       changed: ${{ steps.rebase.outputs.changed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.PATCH_BRANCH }}
           fetch-depth: 0
@@ -79,7 +79,7 @@ jobs:
           git branch -f rebased HEAD
           git bundle create patches.bundle rebased
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: patches-bundle
           path: patches.bundle
@@ -115,13 +115,13 @@ jobs:
     steps:
       - name: Check out plugin
         if: needs.rebase.result == 'skipped'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: plugin
 
       - name: Download rebased patch set
         if: needs.rebase.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: patches-bundle
 
@@ -130,13 +130,13 @@ jobs:
         run: git clone --branch rebased patches.bundle plugin
 
       - name: Check out NetBox ${{ matrix.netbox }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: netbox-community/netbox
           ref: ${{ matrix.netbox }}
           path: netbox
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
 
@@ -164,13 +164,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.PATCH_BRANCH }}
           fetch-depth: 0
           token: ${{ secrets.SYNC_TOKEN || github.token }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: patches-bundle
 
@@ -188,7 +188,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
