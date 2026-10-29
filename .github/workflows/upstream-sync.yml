@@ -94,7 +94,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        netbox: [v4.6.8, v4.7.3]
+        netbox: [v4.6.8, v4.7.4]
     services:
       redis:
         image: redis:7
